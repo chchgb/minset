@@ -1,0 +1,42 @@
+ .libs/escape_string.o .libs/lazy_bdecode.o .libs/assert.o .libs/enum_net.o .libs/broadcast_socket.o .libs/peer_connection.o .libs/bt_peer_
+connection.o .libs/web_peer_connection.o .libs/natpmp.o .libs/piece_picker.o .libs/policy.o .libs/session.o .libs/session_impl.o .libs/sha1
+.o .libs/stat.o .libs/storage.o .libs/torrent.o .libs/torrent_handle.o .libs/pe_crypto.o .libs/torrent_info.o .libs/tracker_manager.o .libs
+/http_connection.o .libs/http_tracker_connection.o .libs/udp_tracker_connection.o .libs/alert.o .libs/identify_client.o .libs/ip_filter.o .
+libs/file.o .libs/metadata_transfer.o .libs/logger.o .libs/file_pool.o .libs/ut_pex.o .libs/lsd.o .libs/upnp.o .libs/instantiate_connection
+.o .libs/socks5_stream.o .libs/socks4_stream.o .libs/http_stream.o .libs/connection_queue.o .libs/disk_io_thread.o .libs/ut_metadata.o .lib
+s/magnet_uri.o .libs/udp_socket.o .libs/smart_ban.o .libs/http_parser.o .libs/gzip.o .libs/disk_buffer_holder.o .libs/create_torrent.o .lib
+s/GeoIP.o .libs/parse_url.o .libs/file_storage.o .libs/error_code.o .libs/closest_nodes.o .libs/dht_tracker.o .libs/find_data.o .libs/node.
+o .libs/node_id.o .libs/refresh.o .libs/routing_table.o .libs/rpc_manager.o .libs/traversal_algorithm.o  -pthread -L/usr/local/lib -lz -lbo
+ost_system-gcc43-mt-1_36 -lboost_filesystem-gcc43-mt-1_36 -lboost_thread-gcc43-mt-1_36 -lssl -lcrypto -L/usr/lib/gcc/i486-linux-gnu/4.3.3 -
+L/usr/lib/gcc/i486-linux-gnu/4.3.3/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/i486-linux-gnu/4.3.3/../../.. -lstdc++ -l
+m -lc -lgcc_s /usr/lib/gcc/i486-linux-gnu/4.3.3/crtendS.o /usr/lib/gcc/i486-linux-gnu/4.3.3/../../../../lib/crtn.o  -Wl,-soname -Wl,libtorr
+ent-rasterbar.so.2 -o .libs/libtorrent-rasterbar.so.2.0.0
+(cd .libs && rm -f libtorrent-rasterbar.so.2 && ln -s libtorrent-rasterbar.so.2.0.0 libtorrent-rasterbar.so.2)
+(cd .libs && rm -f libtorrent-rasterbar.so && ln -s libtorrent-rasterbar.so.2.0.0 libtorrent-rasterbar.so)
+ar cru .libs/libtorrent-rasterbar.a  entry.o escape_string.o lazy_bdecode.o assert.o enum_net.o broadcast_socket.o peer_connection.o bt_pee
+r_connection.o web_peer_connection.o natpmp.o piece_picker.o policy.o session.o session_impl.o sha1.o stat.o storage.o torrent.o torrent_ha
+ndle.o pe_crypto.o torrent_info.o tracker_manager.o http_connection.o http_tracker_connection.o udp_tracker_connection.o alert.o identify_c
+lient.o ip_filter.o file.o metadata_transfer.o logger.o file_pool.o ut_pex.o lsd.o upnp.o instantiate_connection.o socks5_stream.o socks4_s
+tream.o http_stream.o connection_queue.o disk_io_thread.o ut_metadata.o magnet_uri.o udp_socket.o smart_ban.o http_parser.o gzip.o disk_buf
+fer_holder.o create_torrent.o GeoIP.o parse_url.o file_storage.o error_code.o closest_nodes.o dht_tracker.o find_data.o node.o node_id.o re
+fresh.o routing_table.o rpc_manager.o traversal_algorithm.o
+ranlib .libs/libtorrent-rasterbar.a
+creating libtorrent-rasterbar.la
+(cd .libs && rm -f libtorrent-rasterbar.la && ln -s ../libtorrent-rasterbar.la libtorrent-rasterbar.la)
+make[1]: Leaving directory `/home/grey/workspace/libtorrent-rasterbar-0.14.2/src'
+Making all in examples
+make[1]: Entering directory `/home/grey/workspace/libtorrent-rasterbar-0.14.2/examples'
+make[1]: Nothing to be done for `all'.
+make[1]: Leaving directory `/home/grey/workspace/libtorrent-rasterbar-0.14.2/examples'
+Making all in test
+make[1]: Entering directory `/home/grey/workspace/libtorrent-rasterbar-0.14.2/test'
+make[1]: Nothing to be done for `all'.
+make[1]: Leaving directory `/home/grey/workspace/libtorrent-rasterbar-0.14.2/test'
+Making all in bindings/python
+make[1]: Entering directory `/home/grey/workspace/libtorrent-rasterbar-0.14.2/bindings/python'
+make[1]: Nothing to be done for `all'.
+make[1]: Leaving directory `/home/grey/workspace/libtorrent-rasterbar-0.14.2/bindings/python'
+make[1]: Entering directory `/home/grey/workspace/libtorrent-rasterbar-0.14.2'
+make[1]: Nothing to be done for `all-am'.
+make[1]: Leaving directory `/home/grey/workspace/libtorrent-rasterbar-0.14.2'
+grey@grey-desktop:~/workspace/libtorrent-rasterbar-0.14.2$
