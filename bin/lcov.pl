@@ -17,7 +17,7 @@
 #   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 #
 #
-# lcov
+# minset - unofficial fork of lcov 1.7 (original code base: http://ltp.sourceforge.net/coverage/lcov.php)
 #
 #   This is a wrapper script which provides a single interface for accessing
 #   LCOV coverage data.
@@ -66,11 +66,10 @@
 use strict;
 use File::Basename; 
 use Getopt::Long;
-use Data::Dumper; # can be removed for release
 
 # Global constants
-our $lcov_version	= "LCOV version 1.7 w/hacks for differential CCA";
-our $lcov_url		= "undefined";
+our $lcov_version	= "minset version 0.1 (alpha) - unofficial fork of lcov 1.7";
+our $lcov_url		= "http://code.google.com/p/minset/ (parent project: http://ltp.sourceforge.net/coverage/lcov.php)";
 our $tool_name		= basename($0);
 
 # Names of the GCOV kernel module
@@ -128,16 +127,21 @@ sub transform_pattern($);
 sub warn_handler($);
 sub die_handler($);
 
-# Functions added for differential CCA
-sub add_info($$); # adds two .info file execution counts
-sub add_counts_mod($$); # adds two %sumcount hashes
-sub subtract_counts_mod($$); # subtracts two %sumcount hashes
+##### Functions added for differential CCA #####
+sub modify_tracefile_sumcount($$$); # adds or subtracts two .info file execution counts (sumcounts)
+sub add_counts_mod($$);             # adds two %sumcount hashes
+sub subtract_counts_mod($$);        # subtracts two %sumcount hashes
 
-# walk_tracefile() is an incomplete function that is intended to allow
-# easy access to the the contents of a tracefile via callbacks. Not functional.
-sub walk_tracefile($);
-# fetches and parses the rats report by executing rats via system().
-sub get_rat_report($); 
+# returns 0 if the two info files are the same, -1 if the first is greater than the second,
+# and 1 and the second is greater than the first (see constants below)
+sub compare_info($$);
+# constants returned/used by compare_info
+use constant GREATER_THAN => 1;
+use constant EQUAL => 0;
+use constant LESS_THAN => -1;
+
+# SCA integration: fetches and parses the rats report by executing rats via system().
+sub get_rat_report($);
 
 # tracefile_adds_sinks(total_tracefile_path, new_tracefile_path[, limit_to_src_file])
 # does new_tracefile_path add sinks to total_tracefile_path?
@@ -156,20 +160,28 @@ sub tracefile_adds_sinks($$;$);
 sub tracefile_adds_stmt($$;$);
 
 
-# calc_minset()
-sub calc_minset ($$);
+# Given a series of tracefiles, calculate the minimum set of tests that would cover
+# as many statements (or sinks) as the entire set.
+sub calc_minset($$);
 
 # calls get_rat_report to get a rat report for each src file in the tracefile specified (the argument).
 sub sinks_hit($); 
 sub print_debug($); # print out debug information if debug mode is enabled
 
-# returns 0 if the two info files are the same, -1 if the first is greater than the second,
-# and 1 and the second is greater than the first (see constants below)
-sub compare_info($$);
-# constants returned/used by compare_info
-use constant GREATER_THAN => 1;
-use constant EQUAL => 0;
-use constant LESS_THAN => -1;
+
+# GetOptions() globals:
+our @add_option; #  corresponds to --add arguments
+our @subtract_option;  # corresponds to --subtract arguments
+our @compare_total;   # corresponds to --compare-total arguments
+our @compare_src_file; # corresponds to --compare-src-file
+our @compare_func;    # corresponds to --compare-func arguments
+our $sinks_hit_option; # corresponds to --sinks-hit argument ()
+our $calc_sink_minset_option; # corresponds to --calc-sink-minset argument (directory)
+our $calc_stmt_minset_option; # corresponds to --calc-stmt-minset argument (directory)
+our $sink_stats_option; # corresponds to --sink-stats argument (directory)
+our $limit_to_file_option; # corresponds to --limit-to-file argument (source code file)
+
+##################################################
 
 # Global variables & initialization
 our @directory;		# Specifies where to get coverage data from
@@ -207,18 +219,6 @@ our $maxdepth;
 our $config;		# Configuration file contents
 chomp($cwd);
 our $tool_dir = dirname($0);	# Directory where genhtml tool is installed
-
-# add_count_files and sub_count_files are globals filled by GetOptions():
-our @add_option; #  corresponds to --add arguments
-our @subtract_option;  # corresponds to --subtract arguments
-our @compare_total;   # corresponds to --compare-total arguments
-our @compare_src_file; # corresponds to --compare-src-file
-our @compare_func;    # corresponds to --compare-func arguments
-our $sinks_hit_option; # corresponds to --sinks-hit argument ()
-our $calc_sink_minset_option; # corresponds to --calc-sink-minset argument (directory)
-our $calc_stmt_minset_option; # corresponds to --calc-stmt-minset argument (directory)
-our $sink_stats_option; # corresponds to --sink-stats argument (directory)
-our $limit_to_file_option; # corresponds to --limit-to-file argument (source code file)
 
 
 #
@@ -261,7 +261,6 @@ if (!GetOptions("directory|d|di=s" => \@directory,
 		"list=s" => \$list,
 		"kernel-directory=s" => \@kernel_directory,
 		"extract=s" => \$extract,
-
 		"remove=s" => \$remove,
 		"diff=s" => \$diff,
 		"convert-filenames" => \$convert_filenames,
@@ -284,7 +283,7 @@ if (!GetOptions("directory|d|di=s" => \@directory,
 		"ignore-errors=s" => \$ignore_errors,
 		"initial|i" => \$initial,
 		"no-recursion" => \$no_recursion,
-		# start differential mods
+		# start added functionality
 		"add=s{2}" => \@add_option,
 		"subtract=s{2}" => \@subtract_option,
 		"sinks-hit=s" => \$sinks_hit_option,
@@ -408,9 +407,7 @@ elsif ($capture)
 	}
 }
 
-#####################
-# Start differential mods
-# Each one of these elsifs will exit() after the conditional ends
+##### Start differential mods (added options) #####
 
 elsif (defined($sinks_hit_option))
 {
@@ -450,10 +447,10 @@ elsif (defined($sinks_hit_option))
 		}
 	}
 	print "================================================================\n";
-	printf("Sinks hit >0 times: %d - %.2f%%\n", $covered_sinks, (($covered_sinks/$total_sinks)*100));
-	printf("Sinks hit 0 times: %d - %.2f%%\n", $uncovered_sinks, (($uncovered_sinks/$total_sinks)*100));
+	printf("Sinks hit >0 times:     %d - %.2f%%\n", $covered_sinks, (($covered_sinks/$total_sinks)*100));
+	printf("Sinks hit 0 times:      %d - %.2f%%\n", $uncovered_sinks, (($uncovered_sinks/$total_sinks)*100));
 	printf("Sinks not instrumented: %d - %.2f%%\n", $uninstr_sinks, (($uninstr_sinks/$total_sinks)*100));
-	print "==============TOTAL: $total_sinks sinks processed.==============\n\n";
+	print "================TOTAL: $total_sinks sinks processed.=====================\n\n";
 }
 
 elsif (defined($calc_sink_minset_option)) # directory that contains
@@ -495,7 +492,7 @@ elsif (defined($sink_stats_option))
 
 	foreach my $path (@tracefiles) 
 	{
-		last if $num_processed == 20;
+		#last if $num_processed == 20;
 		
 		# get the sinks for $path (next tracefile path)
 		my $sinks = sinks_hit($sink_stats_option."/".$path);
@@ -560,78 +557,132 @@ elsif (defined($sink_stats_option))
 
 elsif (@compare_total or @compare_src_file or @compare_func)
 {
+	# TODO: these --compare options are still in development..
 	info("Comparing info files...\n"); 
 	my $total_result;
-	my @func_result;
-	
-	print "Compare functions UI not implemented. Sorry!\n";
-	exit(0);
-	
-	#print "Result of comparison: ${total_result}\n";
-	#print Dumper(@func_result);
+	my %func_result;
 	
 	# what mode of operation has the user requested?
-	#TODO: this is the wrong option to use for this functionality.. change
+	#TODO: cleanup
 	if (@compare_total) # compare the total coverage of two .info files
 	{	#FIXME: change this so it keeps track of which .info files comprise the total_tracefile
 		my ($info1, $info2) = @compare_total;
-		#($total_result, @func_result) = compare_info($info1, $info2);
+		
 		print "Comparison of stmt cov in .info files specified:\n";
-		print "Total tracefile: $info1\nNew tracefile: $info2\n\n";
+		print "Tracefile #1: $info1\nTracefile #2: $info2\n\n";
+		
+		($total_result, %func_result) = compare_info($info1, $info2);
 		
 		print "Result of statement coverage comparison: ";
-		print compare_info($info1, $info2) . "\n";
+		if($total_result == GREATER_THAN)
+		{
+			print "Tracefile #1 > Tracefile #2\n";
+		} elsif($total_result == LESS_THAN)
+		{
+			print "Tracefile #1 < Tracefile #2\n";
+		} elsif($total_result == EQUAL)
+		{
+			print "Tracefile #1 == Tracefile #2\n";
+		} else
+		{
+			die("Internal error.")
+		}
 		
 	} elsif (@compare_src_file) { # compare the total coverage of two src code files
 		my ($src_file, $info1, $info2) = @compare_src_file;
-		($total_result, @func_result) = compare_info($info1, $info2);
-		print "Comparison of total statement coverage in src file '$src_file' common to .info files specified:\n";
-
-		#if ( defined($func_result{$src_file}
+		
+		my %src_file_comparison;
+		($total_result, %src_file_comparison) = compare_info($info1, $info2);
+		
+		print "Comparison of stmt cov in .info files specified limited to '$src_file':\n";
+		print "Tracefile #1: $info1\nTracefile #2: $info2\n\n";
+		
+		if ( defined($src_file_comparison{$src_file}) )
+		{
+			if($src_file_comparison{$src_file} == GREATER_THAN)
+			{
+				print "Tracefile #1 > Tracefile #2\n";
+			} elsif($src_file_comparison{$src_file} == LESS_THAN)
+			{
+				print "Tracefile #1 < Tracefile #2\n";
+			} elsif($src_file_comparison{$src_file} == EQUAL)
+			{
+				print "Tracefile #1 == Tracefile #2\n";
+			} else
+			{
+				die("Internal error.")
+			}
+		} else
+		{
+			die("Error: '$src_file': no such source code file found.")
+		}
 	} elsif (@compare_func) {
-			my ($func_name, $info1, $info2) = @compare_func;	
-			print "Comparison of total statement coverage in function '$func_name' common to .info files specified:\n";
+			#TODO implement
+			die("Compare total coverage based on source file not implemented, sorry.");
+		
+			my ($func_name, $info1, $info2) = @compare_func;
+			
+			($total_result, %func_result) = compare_info($info1, $info2);
+			
+			print "Comparison of stmt cov in .info files specified limited to '$func_name':\n";
+			print "Tracefile #1: $info1\nTracefile #2: $info2\n\n";
+			
+			if ( defined($func_result{$func_name}) )
+			{
+				if($func_result{$func_name} == GREATER_THAN)
+				{
+					print "Tracefile #1 > Tracefile #2\n";
+				} elsif($func_result{$func_name} == LESS_THAN)
+				{
+					print "Tracefile #1 < Tracefile #2\n";
+				} elsif($func_result{$func_name} == EQUAL)
+				{
+					print "Tracefile #1 == Tracefile #2\n";
+				} else
+				{
+					die("Internal error.")
+				}
+			} else
+			{
+				die("Error: '$func_name': no such function found.")
+			}
 	}
 }
-# user selected --add INFOFILE1 INFOFILE2
-#FIXME this is only slightly different than the --add-tracefile option,
+# user selected --add or --subtract INFOFILE1 INFOFILE2
+#TODO this is only slightly different than the --add-tracefile option,
 #      differentiate the two or remove one
-elsif (@add_option)
+elsif (@add_option || @subtract_option)
 {
-	print "Adding tracefiles...\n";
+	print "Analyzing tracefiles...\n";
 	
-	# $infofile_exhX is the %data hash returned from read_info_file
-	my $infofile1 = read_info_file($add_option[0]);
-	my $infofile2 = read_info_file($add_option[1]);
-	
-	# $result_exh is the result of the --add operation (execution counts are added)
+	# $result_exh is the result of the -operation (execution counts are added/subtracted)
 	my $result;
-
-	#print "INFOFILE1:\n";
-	#print Dumper($infofile1);
-	#print "INFOFILE2:\n";
-	#print Dumper($infofile2);
 	
-	$result = add_info($infofile1, $infofile2);
+	# decide which callback function to use, based on which operation we must perform
+	# TODO move read_info_file() calls to modify_tracefile_sumcounts()
+	if(@add_option)
+	{
+		# read_info_file returns a reference to a hash that is the decoded tracefile
+		my $infofile1 = read_info_file($add_option[0]);
+		my $infofile2 = read_info_file($add_option[1]);
+		$result = modify_tracefile_sumcount($infofile1, $infofile2, \&add_counts_mod);
+	}
+	elsif(@subtract_option)
+	{
+		# read_info_file returns a reference to a hash that is the decoded tracefile
+		my $infofile1 = read_info_file($subtract_option[0]);
+		my $infofile2 = read_info_file($subtract_option[1]);
+		$result = modify_tracefile_sumcount($infofile1, $infofile2, \&subtract_counts_mod);
+	}
 	
-	#print "RESULT:\n";
-	#print Dumper($result);
-	
-	# now $result contains the result of the --add operation, write $shell_data
-	info("Writing resulting data to $output_filename\n");
+	# now $result contains the result of the --add or --subtract operation, write $result
+	info("Writing resulting tracefile to $output_filename\n");
 	open(INFO_HANDLE, ">$output_filename") or die("ERROR: cannot write to $output_filename!\n");
 	write_info_file(*INFO_HANDLE, $result);
 	close(*INFO_HANDLE);
 }
-# user selected --subtract INFOFILE1 INFOFILE2
-elsif (@subtract_option)
-{
-	die("--subtract is currently not implemented, sorry!\n");
-}
 
-# End differential mods
-# Each one of these elsifs will exit() after the conditional ends
-#####################
+##### End added options #####
 
 elsif (@add_tracefile)
 {
@@ -692,31 +743,40 @@ Operation:
   -r, --remove FILE PATTERN       Remove files matching PATTERN from FILE
   -l, --list FILE                 List contents of tracefile FILE
       --diff FILE DIFF            Transform tracefile FILE according to DIFF
-      
-   The following two options may only be used in conjunction with -o, --output-file:
-   the result of the operation on the files will be output to the file specified.
-  --add TRACEFILE TRACEFILE              Add two tracefiles.
-  --subtract TRACEFILE,BASE_TRACEFILE    Subtract FILE from BASE (where base is the baseline).
-  
-  --sinks-hit TRACEFILE                  Show the number of sinks covered, uncovered, and uninstrumented,
-                                         with corresponding percentages, for a given tracefile.
+
+  The following options are specified to use RATS (SCA) integration. You may only
+  use these options if you have 'rats' in your \$PATH:
+  --sinks-hit TRACEFILE                  Show the number of sinks covered, uncovered, and
+                                         uninstrumented (with corresponding percentages) for TRACEFILE.
   --sink-stats TRACEFILE_DIR             Calculate average, minimum, and maximum number of sinks
                                          covered for all .info files in TRACEFILE_DIR.
   --calc-sink-minset TRACEFILE_DIR       Calculate the minimum set of tracefiles that covers
-                                         a maximum number of sinks (you must have rats in your \$PATH).
+                                         a maximum number of sinks (as reported by rats).
+
   --calc-stmt-minset TRACEFILE_DIR       Calculate the minimum set of tracefiles that covers
                                          a maximum amount of statements.
-  --limit-to-file SOURCE_CODE_FILE       Used in conjunction with --calc-*-minset to limit the
+  --limit-to-file SOURCE_FILE   	 Used in conjunction with --calc-*-minset to limit the
                                          analysis to a single source code file in the tracefiles.
   --compare-total TRACEFILE TRACEFILE    Compare total statement coverage of two info files.
-  --compare-src-file SRC_CODE FILE FILE  Compare coverage of a specified src code
-                                         file that is present in two .info files.
+  --compare-src-file SRC_FILE FILE FILE  Compare coverage of a specified src code file (abs. path)
+                                         that is present in two tracefiles.
   --compare-func FUNC_NAME FILE FILE     Compare coverage of a specified function
-                                         that is present in two .info files.
+                                         that is present in two tracefiles. *Not implemented.*
+
+   The following two options may only be used in conjunction with -o, --output-file:
+   the result of the operation on the files will be output to the file specified.
+  --add TRACEFILE1 TRACEFILE2            Add the execution counts of TRACEFILE1 and
+					 TRACEFILE1, then output result to --output-file.
+  --subtract TRACEFILE,BASE_TRACEFILE    Subtract the execution counts of TRACEFILE
+					 from BASE_TRACEFILE and output to --output-file.
+
 
    For example,
        To add two tracefiles that were generated from identical code bases:
-       lcov --add ./run1.info ./run2.info -o ./result.info
+       lcov --add ./run1.info ./run2.info -o ./sum.info
+       
+       To subtract two tracefiles that were generated from identical code bases:
+       lcov --subtract ./new.info ./baseline.info -o ./difference.info
        
        To calculate the minimum test set ("minset") of all .info files in a directory:
        (NOTE: The --limit-to-file part is optional, if not specified, all source code
@@ -1588,6 +1648,9 @@ sub print_debug($)
 	print "[DEBUG] $msg" if(0);
 }
 
+# calc_minset($tracefile_dir, $analysis_callback)
+#	$tracefile_dir: absolute dir that contains the tracefiles
+#	$analysis_callback: reference to function
 sub calc_minset ($$)
 {
 	my $tracefile_dir = shift or die("Incorrect arguments to calc_minset()\n");
@@ -1609,7 +1672,7 @@ sub calc_minset ($$)
 
 	foreach my $this_tracefile_path (@tracefiles) 
 	{
-		last if $num_processed >= 100;
+		#last if $num_processed >= 100;
 		if($num_processed == 0) # first iteration
 		{
 			# create $sumtotal_tracefile (path) and $sumtotal_tracefile_data (tracefile data)
@@ -1622,7 +1685,6 @@ sub calc_minset ($$)
 			open(INFO_HANDLE, ">$sumtotal_tracefile") or die("ERROR: cannot write to $sumtotal_tracefile!\n");
 			write_info_file(*INFO_HANDLE, $sumtotal_tracefile_data);
 			close(*INFO_HANDLE);
-			
 		}
 		
 		# did the user want to limit the minset analysis to one source file?
@@ -1663,6 +1725,7 @@ sub calc_minset ($$)
 	}
 	close(MINSET_LIST);
 	
+	print("Number of tracefiles processed: $num_processed\n");
 	return (\@minset_tracefiles, $sumtotal_tracefile);
 }
 
@@ -1825,9 +1888,9 @@ sub get_rat_report($)
 			#{"fileName"=>$filename,"lineNumber"=>$lineNumber,"severity"=>$severity,"function"=>$function}
 		}
 	}
-	print_debug("get_rat_report: Ret hash: \n");
-	print_debug(Dumper(%ret_hash));
-	print_debug("--------------------end ret hash-----------------------\n");
+	#print_debug("get_rat_report: Ret hash: \n");
+	#print_debug(Dumper(%ret_hash));
+	#print_debug("--------------------end ret hash-----------------------\n");
 	return %ret_hash; # this is an array of values that correspond to line numbers with sinks
 }
 
@@ -1905,20 +1968,23 @@ sub sinks_hit($)
 			$i++;
 		}
 	} # foreach $filename
-	print_debug( "sinks_hit(): sinks_hit = ".Dumper(%sinks_hit)."------------------\n");
+	#print_debug( "sinks_hit(): sinks_hit = ".Dumper(%sinks_hit)."------------------\n");
 	return \%sinks_hit;
 }
 
-# add_info(\%dataref1, |%dataref2)
+# modify_tracefile_sumcount(\%dataref1, \%dataref2, $modify_sumcount_callback)
+# TODO docs
 #	* use read_info_file to get %dataref1 and %dataref2
 #	* returns \%result, which contains the total execution history counts for both info files specified
 #         (eg, %dataref1 + %dataref2 = %result (return value))
-sub add_info($$)
+
+sub modify_tracefile_sumcount($$$)
 {
 	my @datarefs; # array of \%data references, one for each .info file to process
 	# NOTE: this is an array so that we can easily expand this to support addition of multiple .info files
-	$datarefs[0] = $_[0];
-	$datarefs[1] = $_[1];
+	$datarefs[0] = shift or die("modify_tracefile_sumcount(): Incorrect argument list specified.");
+	$datarefs[1] = shift or die("modify_tracefile_sumcount(): Incorrect argument list specified.");
+	my $sumcount_callback = shift or die("modify_tracefile_sumcount(): Incorrect argument list specified.");
 	
 	# default to first .info file
 	my $result;
@@ -1955,43 +2021,43 @@ sub add_info($$)
 			
 			if($i >= 1) # if we are not processing the first .info file:
 			{
-				my $this_test = $datarefs[$i];
-				my $last_test = $datarefs[$i-1];
+				my $this_tracefile = $datarefs[$i];
+				my $last_tracefile = $datarefs[$i-1];
 				
 				# use add_counts_mod to add the per line exec. hist. contained in $sumcount
-				$result->{$filename}->{"sum"} = add_counts_mod($this_test->{$filename}->{"sum"}, $last_test->{$filename}->{"sum"});
+				$result->{$filename}->{"sum"} = &$sumcount_callback($this_tracefile->{$filename}->{"sum"}, $last_tracefile->{$filename}->{"sum"});
 				
 				# update $result->{$filename}->{"test"} to contain the correct values
 				my $test;
-				foreach $test (keys( %{$this_test->{$filename}->{"test"}} ))
+				foreach $test (keys( %{$this_tracefile->{$filename}->{"test"}} ))
 				{
 					# ensure the test we're looking at exists in the previous test
-					unless(defined($last_test->{$filename}->{"test"}->{$test}))
+					unless(defined($last_tracefile->{$filename}->{"test"}->{$test}))
 					{
-						die("ERROR: test: when doing an --add, all .info files must come from the same source code!")
+						die("ERROR: test: when doing an --add or --subtract, all .info files must come from the same source code!")
 					}
 					
 					my $line_num;
-					foreach $line_num (keys(%{ $this_test->{$filename}->{"test"}->{$test} }))
+					foreach $line_num (keys(%{ $this_tracefile->{$filename}->{"test"}->{$test} }))
 					{
 						my $new_exec_count; # total execution count for both this and previous .info files
 
 						# ensure the line number we're looking at exists in the previous test
-						unless(defined($last_test->{$filename}->{"test"}->{$test}->{$line_num}))
+						unless(defined($last_tracefile->{$filename}->{"test"}->{$test}->{$line_num}))
 						{
-							die("ERROR: line_num: when doing an --add, all .info files must come from the same source code!")
+							die("ERROR: line_num: when doing an --add or --subtract, all .info files must come from the same source code!")
 						}
 						
 						# compute the new total execution count and update our return hash
-						$new_exec_count = $last_test->{$filename}->{"test"}->{$test}->{$line_num} + $this_test->{$filename}->{"test"}->{$test}->{$line_num};
-						$result->{$filename}->{"test"}->{$test}->{$line_num} = $new_exec_count;
-					}
-				}
-			}
-			
-		}
+						# TODO: fix this ugly hack - refactor. The following line will likely cause problems
+						#       with tracefiles with multiple child keys under 'test'
+						$result->{$filename}->{"test"}->{$test}->{$line_num} = $result->{$filename}->{"sum"}->{$line_num};
+					} # foreach $line_num
+				} # foreach $test
+			} # if we're not processing the first info file
+		} # for each $filename in each tracefile
 		$i++;
-	}
+	} # for each tracefile
 	return $result;
 }
 
@@ -2035,15 +2101,13 @@ sub add_counts_mod($$)
 			# TODO: this condition should not happen, we should be working with identical code, error condition?
 			die("Warning: only use add_counts_mod() with %data1 and %data2 having identical line numbers (same code)\n");
 		}
-			
+		
 		# Store sum in %result
 		$result{$line} = $data_total;
 
 		$found++;
 		if ($data1_count > 0) { $hit++; }
 	}
-
-	# Note: we do not add lines that are unique to either dataset, like the original did in certain conditions
 
 	return \%result;
 }
@@ -2113,9 +2177,10 @@ sub compare_info($$)
 	
 	my $total_comparison; # either GREATER_THAN, LESS_THAN, or EQUAL - the results of comparing the two .info files
 
-	# this is the results of the comparison of the coverage of $data1 and $data2
-	# $func_cov_comparison{$filename} = GREATHER_THAN, LESS_THAN, or EQUAL
-	my %func_cov_comparison;
+	# This is the results of the comparison of the coverage of $data1 and $data2
+	# for each filename found in the tracefiles specified..
+	# $src_file_comparison{$filename} = GREATHER_THAN, LESS_THAN, or EQUAL
+	my %src_file_comparison;
 
 	# @coverage contains coverage results for $data1 & $data2 (our two .info files to cmp.)
 	# $coverage[0] = {$filename => {"found" => $found, "hit" => $hit}}}
@@ -2135,7 +2200,7 @@ sub compare_info($$)
 		{
 			my $entry = $data->{$filename};
 			(undef, undef, undef, undef, undef, undef, $found, $hit) = get_info_entry($entry);
-			printf("$filename: $hit of $found lines hit\n");
+			print_debug("$filename: $hit of $found lines hit\n");
 
 			# set the found/hit hash for each filename in each .info file
 			$coverage[$data_i]{$filename} = {"found" => $found, "hit" => $hit, "percentage" => $hit/$found }; 
@@ -2146,13 +2211,13 @@ sub compare_info($$)
 				# compare the coverage for each $filename in each .info file
 				if($coverage[0]{$filename}{"percentage"} > $coverage[1]{$filename}{"percentage"})
 				{
-					$func_cov_comparison{$filename} = GREATER_THAN;
+					$src_file_comparison{$filename} = GREATER_THAN;
 				} elsif($coverage[0]{$filename}{"percentage"} < $coverage[1]{$filename}{"percentage"}) 
 				{
-					$func_cov_comparison{$filename} = LESS_THAN;
+					$src_file_comparison{$filename} = LESS_THAN;
 				} else
 				{
-					$func_cov_comparison{$filename} = EQUAL;
+					$src_file_comparison{$filename} = EQUAL;
 				}
 			}
 			
@@ -2174,7 +2239,7 @@ sub compare_info($$)
 		$total_comparison =  EQUAL;
 	}
 
-	return ($total_comparison, %func_cov_comparison)
+	return ($total_comparison, %src_file_comparison)
 }
 
 ########################################################################
