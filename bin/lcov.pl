@@ -143,6 +143,9 @@ use constant LESS_THAN => -1;
 # SCA integration: fetches and parses the rats report by executing rats via system().
 sub get_rat_report($);
 
+# SCA integration: check if 'rats' exists in $PATH
+sub check_for_rats();
+
 # tracefile_adds_sinks(total_tracefile_path, new_tracefile_path[, limit_to_src_file])
 # does new_tracefile_path add sinks to total_tracefile_path?
 # total_tracefile_path is the location of a .info file with the running total for the minset.
@@ -380,6 +383,13 @@ else
 		    "Use $tool_name --help to get usage information\n");
 	}
 }
+
+# Check for the existence of rats if SCA integration features are being used
+if ($sinks_hit_option or $sink_stats_option or $calc_sink_minset_option)
+{
+	die("'rats' must be in your %PATH if you want to use SCA integration features. Install 'rats' and try again.") if (!check_for_rats());
+}
+
 
 # Check for requested functionality
 if ($reset)
@@ -1892,6 +1902,22 @@ sub get_rat_report($)
 	#print_debug(Dumper(%ret_hash));
 	#print_debug("--------------------end ret hash-----------------------\n");
 	return %ret_hash; # this is an array of values that correspond to line numbers with sinks
+}
+
+
+# check_for_rats(): is 'rats' available in the $PATH?
+# returns the rats path if found
+# returns undef if rats is not found in $PATH
+sub check_for_rats()
+{
+	my $rats_path;
+	if(($rats_path = `which rats`) ne '')
+	{
+		return $rats_path 
+	} else
+	{
+		return undef;
+	}
 }
 
 

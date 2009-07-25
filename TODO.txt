@@ -2,7 +2,6 @@
 __TODO__
 
 * index.html all fucked? /mnt/fatty/tracefiles genhtml
-* add check to verify that rats is installed
 * fix genhtml colors!!! and test..
 * rename lcov.pl
 * commit this TODO
