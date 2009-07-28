@@ -66,6 +66,7 @@
 use strict;
 use File::Basename; 
 use Getopt::Long;
+use Data::Dumper;
 
 # Global constants
 our $lcov_version	= "minset version 0.1 (alpha) - unofficial fork of lcov 1.7";
@@ -141,10 +142,7 @@ use constant EQUAL => 0;
 use constant LESS_THAN => -1;
 
 # SCA integration: fetches and parses the rats report by executing rats via system().
-sub get_rat_report($);
-
-# SCA integration: check if 'rats' exists in $PATH
-sub check_for_rats();
+sub get_rats_report($);
 
 # tracefile_adds_sinks(total_tracefile_path, new_tracefile_path[, limit_to_src_file])
 # does new_tracefile_path add sinks to total_tracefile_path?
@@ -167,7 +165,7 @@ sub tracefile_adds_stmt($$;$);
 # as many statements (or sinks) as the entire set.
 sub calc_minset($$);
 
-# calls get_rat_report to get a rat report for each src file in the tracefile specified (the argument).
+# calls get_rats_report to get a rat report for each src file in the tracefile specified (the argument).
 sub sinks_hit($); 
 sub print_debug($); # print out debug information if debug mode is enabled
 
@@ -182,8 +180,11 @@ our $sinks_hit_option; # corresponds to --sinks-hit argument ()
 our $calc_sink_minset_option; # corresponds to --calc-sink-minset argument (directory)
 our $calc_stmt_minset_option; # corresponds to --calc-stmt-minset argument (directory)
 our $sink_stats_option; # corresponds to --sink-stats argument (directory)
+our $stmt_stats_option;
 our $limit_to_file_option; # corresponds to --limit-to-file argument (source code file)
 
+##
+$| = 1; # immediately flush buffers
 ##################################################
 
 # Global variables & initialization
@@ -291,6 +292,7 @@ if (!GetOptions("directory|d|di=s" => \@directory,
 		"subtract=s{2}" => \@subtract_option,
 		"sinks-hit=s" => \$sinks_hit_option,
 		"sink-stats=s" => \$sink_stats_option,
+		"stmt-stats=s" => \$stmt_stats_option,
 		"calc-sink-minset=s" => \$calc_sink_minset_option,
 		"calc-stmt-minset=s" => \$calc_stmt_minset_option,
 		"limit-to-file=s" => \$limit_to_file_option,
@@ -383,13 +385,6 @@ else
 		    "Use $tool_name --help to get usage information\n");
 	}
 }
-
-# Check for the existence of rats if SCA integration features are being used
-if ($sinks_hit_option or $sink_stats_option or $calc_sink_minset_option)
-{
-	die("'rats' must be in your %PATH if you want to use SCA integration features. Install 'rats' and try again.") if (!check_for_rats());
-}
-
 
 # Check for requested functionality
 if ($reset)
@@ -485,6 +480,70 @@ elsif (defined($calc_stmt_minset_option)) # directory that contains
 	print "Number of info files in minset: ".scalar(@$minset_tracefiles)."\n";
 }
 
+elsif (defined($stmt_stats_option))
+{
+	my @tracefiles;
+	my $this_tracefile;
+	
+	opendir DIR,$stmt_stats_option or die "open directory '$stmt_stats_option' failed : $!\n";
+	for(readdir DIR) { push(@tracefiles, $stmt_stats_option."/".$_) if /^\d{1,3}\.info$/; }
+	closedir DIR or die "close directory failed : $!\n";
+	
+	my $total_hit = 0;
+	my $total_found = 0;
+	
+	my $min_stmt_cov;
+	my $min_stmt_tracefile;
+	
+	my $max_stmt_cov;
+	my $max_stmt_tracefile;
+	my ($info1, $info2) = @compare_total;
+	my $i = 0;
+	foreach $this_tracefile (@tracefiles)
+	{
+		if($i == 0)
+		{
+			$max_stmt_tracefile = $this_tracefile;
+			$i++;
+			next;
+		}
+		
+		#if($i == 1000)
+		#{
+		#	last;
+		#}
+		
+		#print "Comparison of stmt cov in .info files specified:\n";
+		#print "Tracefile #1: $info1\nTracefile #2: $info2\n\n";
+		# do we already have a top 3?
+
+		# if we do, is the coverage of this file greater?
+		#FIXME ugly hack - separate 'tracefileX_total_found' and 'tracefileX_total_hit' from %func_result
+		my ($total_result, %func_result) = compare_info($this_tracefile, $max_stmt_tracefile);
+		$total_hit += $func_result{'tracefile1_total_hit'};
+		$total_found += $func_result{'tracefile1_total_found'};
+		my $this_tracefile_stmt_cov = ($func_result{'tracefile1_total_hit'} / $func_result{'tracefile1_total_found'}) * 100;
+		
+		if(!defined($min_stmt_cov) || ($this_tracefile_stmt_cov < $min_stmt_cov))
+		{
+			$min_stmt_cov = $this_tracefile_stmt_cov;
+			$min_stmt_tracefile = $this_tracefile;
+		}
+		
+		#print Dumper(%func_result);
+		if($total_result == GREATER_THAN)
+		{
+			$max_stmt_cov = ($func_result{'tracefile1_total_hit'} / $func_result{'tracefile1_total_found'}) * 100;
+			$max_stmt_tracefile = $this_tracefile;
+		}
+		
+		$i++;
+	}
+	print "Min stmt coverage tracefile: $min_stmt_tracefile: $min_stmt_cov%\n";
+	print "Max stmt coverage tracefile: $max_stmt_tracefile: $max_stmt_cov%\n";
+	print "Average statement coverage: ".(($total_hit/$total_found)*100)."%\n";
+}
+
 elsif (defined($sink_stats_option))
 {
 	my @tracefiles;
@@ -498,8 +557,8 @@ elsif (defined($sink_stats_option))
 	closedir DIR or die "close directory failed : $!\n";
 
 	# get the number of sinks for each tracefile
-	my ($min, $min_tracefile, $max_tracefile, $max, $total, $num_processed) = (undef, undef, undef, undef, 0, 0);	
-
+	my ($min, $min_tracefile, $max_tracefile, $max, $total, $num_processed) = (undef, undef, undef, undef, 0, 0);
+	my ($second_max, $second_max_tracefile, $third_max, $third_max_tracefile) = (undef, undef, undef, undef);
 	foreach my $path (@tracefiles) 
 	{
 		#last if $num_processed == 20;
@@ -550,6 +609,12 @@ elsif (defined($sink_stats_option))
 
 		if(!defined($max) || ($covered_sinks > $max) )
 		{
+			$third_max = $second_max;
+			$third_max_tracefile = $second_max_tracefile;
+			
+			$second_max = $max;
+			$second_max_tracefile = $max_tracefile;
+			
 			$max = $covered_sinks;
 			$max_tracefile = $path;
 		}
@@ -561,7 +626,7 @@ elsif (defined($sink_stats_option))
 
 	print "-----------------------\n";
 	print "Average: ".($total/$num_processed)."\n";
-	print "Max: $max - $max_tracefile\nMin: $min - $min_tracefile\nNum processed: $num_processed\n-----------------------------\n\n";
+	print "Max (#1): $max - $max_tracefile\nMax (#2): $second_max - $second_max_tracefile\nMax (#3): $third_max - $third_max_tracefile\nMin: $min - $min_tracefile\nNum processed: $num_processed\n-----------------------------\n\n";
 }
 
 
@@ -682,7 +747,7 @@ elsif (@add_option || @subtract_option)
 		# read_info_file returns a reference to a hash that is the decoded tracefile
 		my $infofile1 = read_info_file($subtract_option[0]);
 		my $infofile2 = read_info_file($subtract_option[1]);
-		$result = modify_tracefile_sumcount($infofile1, $infofile2, \&subtract_counts_mod);
+		$result = modify_tracefile_sumcount($infofile2, $infofile1, \&subtract_counts_mod);
 	}
 	
 	# now $result contains the result of the --add or --subtract operation, write $result
@@ -846,6 +911,7 @@ sub check_options()
 	$calc_sink_minset_option && $i++;
 	$calc_stmt_minset_option && $i++;
 	$sink_stats_option && $i++;
+	$stmt_stats_option && $i++;
 	
 	if ($i == 0)
 	{
@@ -1670,24 +1736,28 @@ sub calc_minset ($$)
 	my @minset_tracefiles; #array of abs. paths to the tracefiles that the $sumtotal_tracefile contains
 	my $sumtotal_tracefile; #path to the tracefile that is going to be the running total of all of the minset tracefiles
 	my $sumtotal_tracefile_data; # reference to the hash returned by read_info_file() for the $sumtotal_tracefile
-	
-	# find all the .info files in $tracefile_dir
-	# TODO dont read into an array - too much memory use
-	opendir DIR,$tracefile_dir or die "open directory '$tracefile_dir' failed : $!\n";
-	for(readdir DIR) { push(@tracefiles, $tracefile_dir."/".$_) if /^\d{1,3}\.info$/; }
-	closedir DIR or die "close directory failed : $!\n";
 
 	# get the number of sinks for each tracefile
-	my ($min, $min_tracefile, $max_tracefile, $max, $total, $num_processed) = (undef, undef, undef, undef, 0, 0);	
+	my ($min, $min_tracefile, $max_tracefile, $max, $total, $num_processed) = (undef, undef, undef, undef, 0, 1);	
 
-	foreach my $this_tracefile_path (@tracefiles) 
+	# write a list of all of the tracefiles in the minset to a text file for reference
+	open(MINSET_LIST, ">./minset.list.txt") or die("Cant write to ./minset.list.txt: $!");
+	print "Processing info files in '$tracefile_dir':\n";
+	
+	# for each tracefile to process
+	my $done = undef;
+	while(!$done) # while we're not done processing tracefiles
 	{
-		#last if $num_processed >= 100;
-		if($num_processed == 0) # first iteration
+		my $this_tracefile_path = $tracefile_dir."/".$num_processed.".info";
+		#last if $num_processed >= 10;
+		if($num_processed == 1) # first iteration
 		{
 			# create $sumtotal_tracefile (path) and $sumtotal_tracefile_data (tracefile data)
 			# using the first tracefile in the set as a template
-			$sumtotal_tracefile = "./minset_sumtotal.info"; #FIXME let the user choose this
+			$sumtotal_tracefile = "./minset_sumtotal_".scalar(@minset_tracefiles).".info";
+			
+			# read the next info file
+			# the assumption is that the info files will be sequentially named like 1.info ... <END>.info
 			$sumtotal_tracefile_data = read_info_file($this_tracefile_path);
 			
 			# write the new $sumtotal_tracefile_data to the path $sumtotal_tracefile
@@ -1703,36 +1773,48 @@ sub calc_minset ($$)
 		# does this iteration's tracefile add sinks/stmt coverage
 		# (depending on $analysis_callback) to the minset?
 		# the first tracefile is the template for the $sumtotal_tracefile, so it is part of the minset too
-		if( ($num_added > 0) || ($num_processed == 0) )
+		if( ($num_added > 0) || ($num_processed == 1) )
 		{
-			# the tracefile $path adds sinks to the minset thus far,
+			# the tracefile $path adds sinks/stmts to the minset thus far,
 			# add it to the minset ($sumtotal_tracefile and @minset_tracefiles)
 			push(@minset_tracefiles, $this_tracefile_path);
 			print "Adding $this_tracefile_path to minset.\n";
+			if($num_processed == 1)
+			{
+				print MINSET_LIST "$this_tracefile_path: first file analyzed\n";
+			} else
+			{
+				print MINSET_LIST "$this_tracefile_path: adds $num_added\n";
+			}
 			
 			# read the contents of this iteration's tracefile in order to add it to the sumtotal
 			my $this_tracefile_data = read_info_file($this_tracefile_path);
 			
-			# $result is the result of the --add operation (execution counts are added)
-			$sumtotal_tracefile_data = add_info($sumtotal_tracefile_data, $this_tracefile_data);
+			if($num_processed != 1)
+			{
+				# $result is the result of the --add operation (execution counts are added)
+				$sumtotal_tracefile_data = modify_tracefile_sumcount($sumtotal_tracefile_data, $this_tracefile_data, \&add_counts_mod);
+			}
+			# delete the current minset_sumtotal_X.info, the filename is going to change
+			# due to the postfix'd total number of elements in minset (X)
+			# (the filename changes depending on how many info files it is the sum total of,
+			#  in order to enable the file contents caching in read_info_file())
+			print "Deleting old sumtotal file $sumtotal_tracefile.\n";
+			unlink($sumtotal_tracefile);
+			
+			$sumtotal_tracefile = "./minset_sumtotal_".scalar(@minset_tracefiles).".info";
+			
+			# write the new $sumtotal_tracefile_data to the path $sumtotal_tracefile
+			info("Writing new total execution counts for entire minset to $sumtotal_tracefile\n");
+			open(INFO_HANDLE, ">$sumtotal_tracefile") or die("ERROR: cannot write to $sumtotal_tracefile!\n");
+			write_info_file(*INFO_HANDLE, $sumtotal_tracefile_data);
+			close(*INFO_HANDLE);
 		}
-		print "tracefile $this_tracefile_path: adds $num_added\n";
+		print "tracefile $this_tracefile_path: adds $num_added\n\n";
 		
 		$num_processed++;
-		
-		# write the new $sumtotal_tracefile_data to the path $sumtotal_tracefile
-		info("Writing total execution counts for entire minset to $sumtotal_tracefile\n");
-		open(INFO_HANDLE, ">$sumtotal_tracefile") or die("ERROR: cannot write to $sumtotal_tracefile!\n");
-		write_info_file(*INFO_HANDLE, $sumtotal_tracefile_data);
-		close(*INFO_HANDLE);
 	}
 	
-	# write a list of all of the tracefiles in the minset to a text file for reference
-	open(MINSET_LIST, ">./minset.list.txt") or die("Cant write to ./minset.list.txt: $!");
-	foreach $_ (@minset_tracefiles)
-	{
-		print MINSET_LIST $_."\n";
-	}
 	close(MINSET_LIST);
 	
 	print("Number of tracefiles processed: $num_processed\n");
@@ -1845,7 +1927,7 @@ sub tracefile_adds_stmt($$;$)
 			# $total_count is the execution count for this $line of this $filename
 			my $total_count = $total_data->{$filename}{"sum"}{$line};
 			# $new_count is the execution count for this $line of this $filename
-			my $new_count = $total_data->{$filename}{"sum"}{$line};
+			my $new_count = $new_data->{$filename}{"sum"}{$line};
 			
 			if( ($total_count == 0) && ($new_count > 0) )
 			{
@@ -1870,8 +1952,15 @@ sub tracefile_adds_stmt($$;$)
 # rats must be in your path.
 # Argument is a path to a source file that rats will generate a report for.
 # returns: %ret_hash = {filename => (sink_line_num1, sink_line_num2, ..), ... }
-sub get_rat_report($)
+sub get_rats_report($)
 {
+	# check for the existence of rats
+	my $rats_path;
+	if(($rats_path = `which rats`) eq '')
+	{
+		die("'rats' must be in your %PATH if you want to use SCA integration features. Install 'rats' and try again.\n");
+	}
+	
 	my $count=0;
 	my %ret_hash = (); # filename => (array of lines numbers with sinks), .. 
 	my $source_path=shift;
@@ -1892,13 +1981,17 @@ sub get_rat_report($)
 		if ($rat_line =~ m|(.*):(\d+):\s*(\w+):\s*(.*)| )
 		{
 			($filename,$line_number,$severity,$vuln)=($1,$2,$3,$4); #TODO is $4 right?
-			print_debug("$filename:$line_number - $severity: '$vuln'.\n");
-			# store per-line sinks for each src file in the tracefile
-			$ret_hash{$filename}[$count++] = $line_number;
-			#{"fileName"=>$filename,"lineNumber"=>$lineNumber,"severity"=>$severity,"function"=>$function}
+			# make sure that we're really looking at a strict definition of a 'sink'
+			if(($severity eq 'High') and ($vuln ne "fixed size local buffer") and ($vuln ne "random"))
+			{
+				#print("$filename:$line_number - $severity: '$vuln'.\n");
+				# store per-line sinks for each src file in the tracefile
+				$ret_hash{$filename}[$count++] = $line_number;
+				#{"fileName"=>$filename,"lineNumber"=>$lineNumber,"severity"=>$severity,"function"=>$function}
+			}
 		}
 	}
-	#print_debug("get_rat_report: Ret hash: \n");
+	#print_debug("get_rats_report: Ret hash: \n");
 	#print_debug(Dumper(%ret_hash));
 	#print_debug("--------------------end ret hash-----------------------\n");
 	return %ret_hash; # this is an array of values that correspond to line numbers with sinks
@@ -1922,7 +2015,7 @@ sub check_for_rats()
 
 
 # sinks_hit(tracefile_path (path to .info))
-# uses get_rat_report() to determine which sinks where hit for every src file in the tracefile specified,
+# uses get_rats_report() to determine which sinks where hit for every src file in the tracefile specified,
 # and then determines how many times each sink was hit. If no coverage data exists for a given sink, `undef`
 # will be used as the number of times the sink was hit.
 ## returns: \%sinks_hit = {filename => {sink_line_num => num_times_hit, ...}, ...}
@@ -1952,7 +2045,7 @@ sub sinks_hit($)
 			print_debug("SUMCOUNT [$line_num] ".$sumcount->{$line_num}."\n");
 		}
 		
-		%sinks_per_file=get_rat_report($filename);
+		%sinks_per_file=get_rats_report($filename);
 		
 		if (!exists($sinks_per_file{$filename}))
 		{
@@ -2265,7 +2358,13 @@ sub compare_info($$)
 		$total_comparison =  EQUAL;
 	}
 
-	return ($total_comparison, %src_file_comparison)
+	#FIXME ugly hack
+	$src_file_comparison{'tracefile1_total_hit'} = $total_hits[0]{"hit"};
+	$src_file_comparison{'tracefile2_total_hit'} = $total_hits[1]{"hit"};
+	$src_file_comparison{'tracefile1_total_found'} = $total_hits[0]{"found"};
+	$src_file_comparison{'tracefile2_total_found'} = $total_hits[1]{"found"};
+
+	return ($total_comparison, %src_file_comparison);
 }
 
 ########################################################################

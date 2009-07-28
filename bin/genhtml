@@ -1,44 +1,5 @@
 #!/usr/bin/perl -w
 use Data::Dumper;
-
-#FIXME remove
-
-# rats must be in your path.
-# Argument is a path to a source file that rats will generate a report for.
-# returns: %ret_hash = {filename => (sink_line_num1, sink_line_num2, ..), ... }
-sub get_rat_report($)
-{
-	my $count=0;
-	my %ret_hash = (); # filename => (array of lines numbers with sinks), .. 
-	my $source_path=shift;
-	$source_path =~ s/ /\\ /g;
-	my $execute="rats ".$source_path;
-	my $rats_output=`$execute`;
-	my @rat_data=split("\n",$rats_output);
-	
-	my $rat_line;
-	foreach $rat_line (@rat_data)
-	{
-		my $filename;
-		my $line_number;
-		my $severity;
-		my $vuln;
-		
-		#match any lines like :12:, no matter how large or small the number is.
-		if ($rat_line =~ m|(.*):(\d+):\s*(\w+):\s*(.*)| )
-		{
-			($filename,$line_number,$severity,$vuln)=($1,$2,$3,$4); #TODO is $4 right?
-			#print_debug("$filename:$line_number - $severity: '$vuln'.\n");
-			# store per-line sinks for each src file in the tracefile
-			$ret_hash{$filename}[$count++] = $line_number;
-			#{"fileName"=>$filename,"lineNumber"=>$lineNumber,"severity"=>$severity,"function"=>$function}
-		}
-	}
-	#print_debug("get_rat_report: Ret hash: \n");
-	#print_debug(Dumper(%ret_hash));
-	#print_debug("--------------------end ret hash-----------------------\n");
-	return %ret_hash; # this is an array of values that correspond to line numbers with sinks
-}
 #
 #   Copyright (c) International Business Machines  Corp., 2002
 #
@@ -266,6 +227,7 @@ our @fileview_sortname = ("", "-sort-l", "-sort-f");
 our @funcview_sortlist;
 our @rate_name = ("Lo", "Med", "Hi");
 our @rate_png = ("ruby.png", "amber.png", "emerald.png");
+our $enable_rats;       # enable SCA integration (sink highlighting)?
 
 our $cwd = `pwd`;	# Current working directory
 chomp($cwd);
@@ -348,6 +310,7 @@ if (!GetOptions("output-directory=s"	=> \$output_directory,
 		"no-function-coverage"	=> \$no_func_coverage,
 		"sort"			=> \$sort,
 		"no-sort"		=> \$no_sort,
+		"enable-rats|r"         => \$enable_rats
 		))
 {
 	print(STDERR "Use $tool_name --help to get usage information\n");
@@ -507,6 +470,7 @@ Operation:
   -p, --prefix PREFIX               Remove PREFIX from all directory names
       --no-prefix                   Do not remove prefix from directory names
       --(no-)function-coverage      Enable (disable) function coverage display
+  -r  --enable-rats                 Enable SCA integration (highlight sinks)
 
 HTML output:
   -f, --frames                      Use HTML frames for source code view
@@ -527,6 +491,67 @@ END_OF_USAGE
 	;
 }
 
+
+#### TODO: the following code is common to lcov.pl- use only one copy. #########
+
+# rats must be in your path.
+# Argument is a path to a source file that rats will generate a report for.
+# returns: %ret_hash = {filename => (sink_line_num1, sink_line_num2, ..), ... }
+sub get_rats_report($)
+{
+	# check for the existence of rats
+	my $rats_path;
+	if(($rats_path = `which rats`) eq '')
+	{
+		die("'rats' must be in your %PATH if you want to use SCA integration features. Install 'rats' and try again.\n");
+	}
+	
+	my $count=0;
+	my %ret_hash = (); # filename => (array of lines numbers with sinks), .. 
+	my $source_path=shift;
+	$source_path =~ s/ /\\ /g;
+	my $execute="rats ".$source_path;
+	my $rats_output=`$execute`;
+	my @rat_data=split("\n",$rats_output);
+	
+	my $rat_line;
+	foreach $rat_line (@rat_data)
+	{
+		my $filename;
+		my $line_number;
+		my $severity;
+		my $vuln;
+		
+		#match any lines like :12:, no matter how large or small the number is.
+		if ($rat_line =~ m|(.*):(\d+):\s*(\w+):\s*(.*)| )
+		{
+			($filename,$line_number,$severity,$vuln)=($1,$2,$3,$4); #TODO is $4 right?
+			# make sure that we're really looking at a strict definition of a 'sink'
+			if(($severity eq 'High') and ($vuln ne "fixed size local buffer") and ($vuln ne "random"))
+			{
+				print("$filename:$line_number - $severity: '$vuln'.\n");
+				# store per-line sinks for each src file in the tracefile
+				$ret_hash{$filename}[$count++] = $line_number;
+				#{"fileName"=>$filename,"lineNumber"=>$lineNumber,"severity"=>$severity,"function"=>$function}
+			}
+		}
+	}
+	#print_debug("get_rats_report: Ret hash: \n");
+	#print_debug(Dumper(%ret_hash));
+	#print_debug("--------------------end ret hash-----------------------\n");
+	return %ret_hash; # this is an array of values that correspond to line numbers with sinks
+}
+
+
+# check_for_rats(): is 'rats' available in the $PATH?
+# returns the rats path if found
+# returns undef if rats is not found in $PATH
+sub check_for_rats()
+{
+
+}
+
+##########################################################################333
 
 #
 # get_rate(found, hit)
@@ -2682,7 +2707,9 @@ sub write_css_file()
 	td.sinkCov,
 	span.sinkCov
 	{
-	  background-color: #0BC40F; /* green */
+	 background-color: #CAD7FE;
+	 font-weight: bold;
+	 font-style:italic;
 	}
 	
 	/* Source code view: format for Cov legend */
@@ -2705,14 +2732,17 @@ sub write_css_file()
 	td.sinkNoCov,
 	span.sinkNoCov
 	{
-	  background-color: #E60707; /* red */
+	  background-color: #FF6230;
+	  font-weight: bold;
+	  font-style:italic;
 	}
 	
 	/* Source code view: format for sinks which no coverage data was collected for */
 	td.sinkNotInstr,
 	span.sinkNotInstr
 	{
-	  background-color: #E3DB07; /* puke yellow */
+	 font-weight: bold;
+	 font-style: italic;
 	}
 	
 	
@@ -2733,8 +2763,7 @@ sub write_css_file()
 	  text-decoration: underline;
 	}  
 	
-	/* Source code view: format for lines which were executed only in a
-	   previous version */
+	/* Source code view: format for lines which were executed only in a previous version */
 	span.lineDiffCov
 	{
 	  background-color: #B5F7AF;
@@ -3424,14 +3453,13 @@ sub write_source_line(*$$$$$$)
 	my $anchor_start = "";
 	my $anchor_end = "";
 	my $line_is_sink = $_[6] or undef;
-	print "write_source_line: line_is_sink = ".Dumper($line_is_sink)."\n";
-#DAA
+
 	if (!(defined$_[3])) # hit count not defined
 	{
 		$result		= "";
 		$count		= " "x15;
 		
-		if ($line_is_sink == 1)
+		if (defined($line_is_sink) and ($line_is_sink == 1))
 		{
 			# this line is an uncovered sink
 			$source_format	= '<span class="sinkNotInstr">';
@@ -3444,7 +3472,8 @@ sub write_source_line(*$$$$$$)
 	{
 		$result		= $_[3];
 		$count		= sprintf("%15d", $_[3]);
-		if ($line_is_sink == 1)
+		
+		if (defined($line_is_sink) and ($line_is_sink == 1))
 		{
 			# this line is an uncovered sink
 			$source_format	= '<span class="sinkNoCov">';
@@ -3463,7 +3492,7 @@ sub write_source_line(*$$$$$$)
 		$result		= $_[3];
 		$count		= sprintf("%15d", $_[3]);
 		
-		if ($line_is_sink == 1)
+		if (defined($line_is_sink) and ($line_is_sink == 1))
 		{
 			# this line is a covered sink
 			$source_format = '<span class="sinkCov">';
@@ -3484,7 +3513,6 @@ sub write_source_line(*$$$$$$)
 
 
 	# *************************************************************
-
 	write_html($_[0],
 		   $anchor_start.
 		   '<span class="lineNum">'.sprintf("%8d", $_[1]).
@@ -4241,7 +4269,6 @@ sub get_hash_reverse($)
 #
 # Die on error.
 #
-#DAA
 sub write_source($$$$$$)
 {
 	local *HTML_HANDLE = $_[0];
@@ -4264,9 +4291,13 @@ sub write_source($$$$$$)
 	open(SOURCE_HANDLE, "<".$source_filename)
 		or die("ERROR: cannot open $source_filename for reading!\n");
 	
-	# get the rats report for this source file
-	my %sinks = get_rat_report($source_filename);
-
+	my %sinks;
+	if ($enable_rats)
+	{
+		# get the rats report for this source file
+		%sinks = get_rats_report($source_filename);
+	}
+	
 	write_source_prolog(*HTML_HANDLE);
 
 	for ($line_number = 1; <SOURCE_HANDLE> ; $line_number++)
@@ -4280,10 +4311,19 @@ sub write_source($$$$$$)
 			die("ERROR: checksum mismatch  at $source_filename:".
 			    "$line_number\n");
 		}
-
-		my $line_is_sink = 0; # is this line a sink? default to 'no'
-		if(exists $sinks{$source_filename})
+		
+		if($source_filename eq "/home/grey/workspace/bt/ctorrent-dnh3.3.2/btcontent.cpp")
 		{
+			my $test = "test";
+		}
+		# is this line a sink?
+		# undef = sink reporting not enabled
+		# 0 = this line is not a sink
+		# 1 = this line is a sink
+		my $line_is_sink = undef; 
+		if($enable_rats and exists($sinks{$source_filename}) )
+		{
+			$line_is_sink = 0; # default to 'not a sink'
 			foreach my $sink_line_number (@{$sinks{$source_filename}})
 			{
 				if($sink_line_number == $line_number)

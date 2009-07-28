@@ -3,16 +3,24 @@ __TODO__
 
 * index.html all fucked? /mnt/fatty/tracefiles genhtml
 * fix genhtml colors!!! and test..
-* rename lcov.pl
-* commit this TODO
-* fix --compare options, implement --compare-func. Add ability to compare based on sinks.
-* fully understand the difference between {'sum'} and {'test'} & fix ugly hack in modify_tracefile_sumcount($$$)
 
-* add checks to see if code base differs?
+__NEW FEATURES__
+* implement --limit-to-dir (limit analysis to all files in a directory, like say, for example, a library)
+* fix --compare options, implement --compare-func. Add ability to compare based on sinks.
 * add --max option (maximum number of X to process)
 * add/subtract multiple tracefiles (see modify_tracefile_sumcounts())
+* output more helpful stats for --sink-stats and --sinks-hit (and maybe rename options)?
+* add checks to see if code base differs?
+
+__CLEANUP__
+
 * sooo much data is being passed around on the stack. use references or move read_info_file() calls
 * --add/--subtract: this is only slightly different than the --add-tracefile option, differentiate the two or remove one
 * cleanup  add/subtract_counts_mod($$)
+* fully understand the difference between {'sum'} and {'test'} & fix ugly hack in modify_tracefile_sumcount($$$)
+* rename lcov.pl
+* make get_rats_report common to both lcov and genhtml
+
+__DOCUMENTATION__
+
 * fix users guide / google code page
-* output more helpful stats for --sink-stats and --sinks-hit (and maybe rename options)?
